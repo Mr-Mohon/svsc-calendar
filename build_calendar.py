@@ -17,20 +17,20 @@ TZ = ZoneInfo("America/Los_Angeles")
 
 SESSION = requests.Session()
 SESSION.headers.update({
-    "User-Agent": "SVSC-Personal-Calendar/2.0 (+GitHub Actions; personal calendar subscription)"
+    "User-Agent": "SVSC-Personal-Calendar/2.1 (+GitHub Actions; personal calendar subscription)"
 })
 
-EVENT_ID_RE = re.compile(r"/event-(\\d+)")
-DATE_RE = re.compile(r"\\b(\\d{1,2}/\\d{1,2}/\\d{4})\\b")
+EVENT_ID_RE = re.compile(r"/event-(\d+)")
+DATE_RE = re.compile(r"\b(\d{1,2}/\d{1,2}/\d{4})\b")
 TIME_RANGE_RE = re.compile(
-    r"\\b(\\d{1,2}:\\d{2}\\s*[AP]M)\\s*-\\s*(\\d{1,2}:\\d{2}\\s*[AP]M)\\b",
+    r"\b(\d{1,2}:\d{2}\s*[AP]M)\s*-\s*(\d{1,2}:\d{2}\s*[AP]M)\b",
     re.IGNORECASE,
 )
 SESSION_RE = re.compile(
-    r"\\b(\\d{1,2}/\\d{1,2}/\\d{4}),\\s*"
-    r"(\\d{1,2}:\\d{2}\\s*[AP]M)\\s+"
-    r"(\\d{1,2}:\\d{2}\\s*[AP]M)"
-    r"(?:\\s*\\([A-Z]{2,5}\\))?",
+    r"\b(\d{1,2}/\d{1,2}/\d{4}),\s*"
+    r"(\d{1,2}:\d{2}\s*[AP]M)\s+"
+    r"(\d{1,2}:\d{2}\s*[AP]M)"
+    r"(?:\s*\([A-Z]{2,5}\))?",
     re.IGNORECASE,
 )
 
@@ -52,12 +52,12 @@ def event_links_from_list(html: str):
 
 
 def clean_lines(soup: BeautifulSoup):
-    text = soup.get_text("\\n", strip=True)
-    return [re.sub(r"\\s+", " ", x).strip() for x in text.splitlines() if x.strip()]
+    text = soup.get_text("\n", strip=True)
+    return [re.sub(r"\s+", " ", x).strip() for x in text.splitlines() if x.strip()]
 
 
 def parse_clock(value: str):
-    return datetime.strptime(re.sub(r"\\s+", "", value.upper()), "%I:%M%p").time()
+    return datetime.strptime(re.sub(r"\s+", "", value.upper()), "%I:%M%p").time()
 
 
 def make_datetimes(date_text: str, start_text: str, end_text: str):
@@ -83,16 +83,18 @@ def parse_event(event_id: str, url: str):
     h1 = soup.find("h1")
     title = h1.get_text(" ", strip=True) if h1 else f"SVSC Event {event_id}"
     lines = clean_lines(soup)
-    joined = "\\n".join(lines)
+    joined = "\n".join(lines)
     location = find_location(lines)
 
     session_matches = list(SESSION_RE.finditer(joined))
     if session_matches:
         occurrences = []
         seen = set()
+
         for index, match in enumerate(session_matches):
             date_text, start_text, end_text = match.groups()
             start, end = make_datetimes(date_text, start_text, end_text)
+
             key = (start, end)
             if key in seen:
                 continue
@@ -118,10 +120,12 @@ def parse_event(event_id: str, url: str):
 
     dm = DATE_RE.search(joined)
     tm = TIME_RANGE_RE.search(joined)
+
     if not dm or not tm:
         raise ValueError(f"Could not parse date/time for {url}")
 
     start, end = make_datetimes(dm.group(1), tm.group(1), tm.group(2))
+
     return [{
         "uid": f"svsc-event-{event_id}@scottsvalleysportsmen.com",
         "url": url,
@@ -152,6 +156,7 @@ def build_calendar(events):
         ev.add("url", item["url"])
         ev.add("description", f"SVSC event details: {item['url']}")
         cal.add_component(ev)
+
     return cal
 
 
@@ -167,11 +172,13 @@ def main():
         try:
             occurrences = parse_event(event_id, url)
             events.extend(occurrences)
+
             if len(occurrences) > 1:
                 print(f"OK recurring ({len(occurrences)} sessions) {occurrences[0]['title']}")
             else:
                 ev = occurrences[0]
                 print(f"OK {ev['start']:%Y-%m-%d %H:%M}-{ev['end']:%H:%M} {ev['title']}")
+
         except Exception as exc:
             failures.append((url, str(exc)))
             print(f"WARN {url}: {exc}", file=sys.stderr)
