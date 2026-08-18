@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import re
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import urljoin
 from zoneinfo import ZoneInfo
@@ -17,15 +17,22 @@ TZ = ZoneInfo("America/Los_Angeles")
 
 SESSION = requests.Session()
 SESSION.headers.update({
-    "User-Agent": "SVSC-Personal-Calendar/1.0 (+GitHub Actions; personal calendar subscription)"
+    "User-Agent": "SVSC-Personal-Calendar/2.0 (+GitHub Actions; personal calendar subscription)"
 })
 
-DATE_RE = re.compile(r"\b(\d{1,2}/\d{1,2}/\d{4})\b")
+EVENT_ID_RE = re.compile(r"/event-(\\d+)")
+DATE_RE = re.compile(r"\\b(\\d{1,2}/\\d{1,2}/\\d{4})\\b")
 TIME_RANGE_RE = re.compile(
-    r"\b(\d{1,2}:\d{2}\s*[AP]M)\s*-\s*(\d{1,2}:\d{2}\s*[AP]M)\b",
+    r"\\b(\\d{1,2}:\\d{2}\\s*[AP]M)\\s*-\\s*(\\d{1,2}:\\d{2}\\s*[AP]M)\\b",
     re.IGNORECASE,
 )
-EVENT_ID_RE = re.compile(r"/event-(\d+)")
+SESSION_RE = re.compile(
+    r"\\b(\\d{1,2}/\\d{1,2}/\\d{4}),\\s*"
+    r"(\\d{1,2}:\\d{2}\\s*[AP]M)\\s+"
+    r"(\\d{1,2}:\\d{2}\\s*[AP]M)"
+    r"(?:\\s*\\([A-Z]{2,5}\\))?",
+    re.IGNORECASE,
+)
 
 
 def fetch(url: str) -> str:
@@ -38,66 +45,91 @@ def event_links_from_list(html: str):
     soup = BeautifulSoup(html, "html.parser")
     links = {}
     for a in soup.find_all("a", href=True):
-        href = a["href"]
-        m = EVENT_ID_RE.search(href)
-        if not m:
-            continue
-        event_id = m.group(1)
-        links[event_id] = urljoin(BASE, href)
+        m = EVENT_ID_RE.search(a["href"])
+        if m:
+            links[m.group(1)] = urljoin(BASE, a["href"])
     return sorted(links.items(), key=lambda x: int(x[0]))
 
 
 def clean_lines(soup: BeautifulSoup):
-    text = soup.get_text("\n", strip=True)
-    return [re.sub(r"\s+", " ", x).strip() for x in text.splitlines() if x.strip()]
+    text = soup.get_text("\\n", strip=True)
+    return [re.sub(r"\\s+", " ", x).strip() for x in text.splitlines() if x.strip()]
+
+
+def parse_clock(value: str):
+    return datetime.strptime(re.sub(r"\\s+", "", value.upper()), "%I:%M%p").time()
+
+
+def make_datetimes(date_text: str, start_text: str, end_text: str):
+    date_obj = datetime.strptime(date_text, "%m/%d/%Y").date()
+    start = datetime.combine(date_obj, parse_clock(start_text), TZ)
+    end = datetime.combine(date_obj, parse_clock(end_text), TZ)
+    if end <= start:
+        end += timedelta(days=1)
+    return start, end
+
+
+def find_location(lines):
+    for i, line in enumerate(lines):
+        if line == "Location" and i + 1 < len(lines):
+            candidate = lines[i + 1]
+            if candidate not in {"Log in", "Back", "When", "Registration"}:
+                return candidate
+    return None
 
 
 def parse_event(event_id: str, url: str):
-    html = fetch(url)
-    soup = BeautifulSoup(html, "html.parser")
-
+    soup = BeautifulSoup(fetch(url), "html.parser")
     h1 = soup.find("h1")
     title = h1.get_text(" ", strip=True) if h1 else f"SVSC Event {event_id}"
-
     lines = clean_lines(soup)
-    joined = "\n".join(lines)
+    joined = "\\n".join(lines)
+    location = find_location(lines)
+
+    session_matches = list(SESSION_RE.finditer(joined))
+    if session_matches:
+        occurrences = []
+        seen = set()
+        for index, match in enumerate(session_matches):
+            date_text, start_text, end_text = match.groups()
+            start, end = make_datetimes(date_text, start_text, end_text)
+            key = (start, end)
+            if key in seen:
+                continue
+            seen.add(key)
+
+            uid = (
+                f"svsc-event-{event_id}@scottsvalleysportsmen.com"
+                if index == 0
+                else f"svsc-event-{event_id}-{start:%Y%m%dT%H%M}@scottsvalleysportsmen.com"
+            )
+
+            occurrences.append({
+                "uid": uid,
+                "url": url,
+                "title": title,
+                "start": start,
+                "end": end,
+                "location": location,
+            })
+
+        if occurrences:
+            return occurrences
 
     dm = DATE_RE.search(joined)
     tm = TIME_RANGE_RE.search(joined)
     if not dm or not tm:
         raise ValueError(f"Could not parse date/time for {url}")
 
-    date_text = dm.group(1)
-    start_text = tm.group(1).upper().replace(" ", "")
-    end_text = tm.group(2).upper().replace(" ", "")
-
-    date_obj = datetime.strptime(date_text, "%m/%d/%Y").date()
-    start_time = datetime.strptime(start_text, "%I:%M%p").time()
-    end_time = datetime.strptime(end_text, "%I:%M%p").time()
-
-    start = datetime.combine(date_obj, start_time, TZ)
-    end = datetime.combine(date_obj, end_time, TZ)
-    if end <= start:
-        # Handles an event that crosses midnight.
-        from datetime import timedelta
-        end += timedelta(days=1)
-
-    location = None
-    for i, line in enumerate(lines):
-        if line == "Location" and i + 1 < len(lines):
-            candidate = lines[i + 1]
-            if candidate not in {"Log in", "Back", "When"}:
-                location = candidate
-            break
-
-    return {
-        "id": event_id,
+    start, end = make_datetimes(dm.group(1), tm.group(1), tm.group(2))
+    return [{
+        "uid": f"svsc-event-{event_id}@scottsvalleysportsmen.com",
         "url": url,
         "title": title,
         "start": start,
         "end": end,
         "location": location,
-    }
+    }]
 
 
 def build_calendar(events):
@@ -111,7 +143,7 @@ def build_calendar(events):
 
     for item in sorted(events, key=lambda x: x["start"]):
         ev = Event()
-        ev.add("uid", f"svsc-event-{item['id']}@scottsvalleysportsmen.com")
+        ev.add("uid", item["uid"])
         ev.add("summary", item["title"])
         ev.add("dtstart", item["start"])
         ev.add("dtend", item["end"])
@@ -120,23 +152,26 @@ def build_calendar(events):
         ev.add("url", item["url"])
         ev.add("description", f"SVSC event details: {item['url']}")
         cal.add_component(ev)
-
     return cal
 
 
 def main():
     print(f"Fetching event list: {LIST_URL}")
-    list_html = fetch(LIST_URL)
-    links = event_links_from_list(list_html)
-    print(f"Found {len(links)} event links")
+    links = event_links_from_list(fetch(LIST_URL))
+    print(f"Found {len(links)} event pages")
 
     events = []
     failures = []
+
     for event_id, url in links:
         try:
-            ev = parse_event(event_id, url)
-            events.append(ev)
-            print(f"OK {ev['start']:%Y-%m-%d %H:%M}-{ev['end']:%H:%M}  {ev['title']}")
+            occurrences = parse_event(event_id, url)
+            events.extend(occurrences)
+            if len(occurrences) > 1:
+                print(f"OK recurring ({len(occurrences)} sessions) {occurrences[0]['title']}")
+            else:
+                ev = occurrences[0]
+                print(f"OK {ev['start']:%Y-%m-%d %H:%M}-{ev['end']:%H:%M} {ev['title']}")
         except Exception as exc:
             failures.append((url, str(exc)))
             print(f"WARN {url}: {exc}", file=sys.stderr)
@@ -146,10 +181,10 @@ def main():
 
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_bytes(build_calendar(events).to_ical())
-    print(f"Wrote {OUT} with {len(events)} events")
+    print(f"Wrote {OUT} with {len(events)} calendar occurrences")
 
     if failures:
-        print(f"{len(failures)} event(s) could not be parsed.", file=sys.stderr)
+        print(f"{len(failures)} event page(s) could not be parsed.", file=sys.stderr)
 
 
 if __name__ == "__main__":
