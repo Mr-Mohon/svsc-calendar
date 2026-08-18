@@ -17,7 +17,7 @@ TZ = ZoneInfo("America/Los_Angeles")
 
 SESSION = requests.Session()
 SESSION.headers.update({
-    "User-Agent": "SVSC-Personal-Calendar/3.1 (+GitHub Actions; personal calendar subscription)"
+    "User-Agent": "SVSC-Personal-Calendar/3.2 (+GitHub Actions; personal calendar subscription)"
 })
 
 EVENT_ID_RE = re.compile(r"/event-(\d+)")
@@ -243,6 +243,7 @@ def extract_related_links(soup, event_url):
 
     for a in soup.find_all("a", href=True):
         href = a["href"].strip()
+
         label = re.sub(
             r"\s+",
             " ",
@@ -287,7 +288,7 @@ def build_notes(
 
     if description:
         parts.append(
-            "EVENT DETAILS\n\n"
+            "EVENT DETAILS:\n\n"
             + description
         )
 
@@ -311,23 +312,25 @@ def build_notes(
 
     if registration_lines:
         parts.append(
-            "REGISTRATION\n\n"
+            "REGISTRATION:\n\n"
             + "\n".join(registration_lines)
         )
 
     if location:
         parts.append(
-            "LOCATION\n\n"
+            "LOCATION:\n\n"
             + location
         )
 
     if related_links:
         parts.append(
-            "RELATED LINKS / CONTACT\n\n"
+            "RELATED LINKS / CONTACT:\n\n"
             + "\n".join(related_links)
         )
 
-    return "\n\n".join(parts)
+    # Three line breaks give Apple Calendar an extra blank line
+    # between each major section.
+    return "\n\n\n".join(parts)
 
 
 def parse_event(event_id: str, url: str):
