@@ -288,7 +288,7 @@ def build_notes(
 
     if description:
         parts.append(
-            "EVENT DETAILS:\n"
+            "EVENT DETAILS:\n\n"
             + description
         )
 
