@@ -17,7 +17,7 @@ TZ = ZoneInfo("America/Los_Angeles")
 
 SESSION = requests.Session()
 SESSION.headers.update({
-    "User-Agent": "SVSC-Personal-Calendar/3.2 (+GitHub Actions; personal calendar subscription)"
+    "User-Agent": "SVSC-Personal-Calendar/3.3 (+GitHub Actions; personal calendar subscription)"
 })
 
 EVENT_ID_RE = re.compile(r"/event-(\d+)")
@@ -288,7 +288,7 @@ def build_notes(
 
     if description:
         parts.append(
-            "EVENT DETAILS:\n\n"
+            "EVENT DETAILS:\n"
             + description
         )
 
@@ -312,24 +312,24 @@ def build_notes(
 
     if registration_lines:
         parts.append(
-            "REGISTRATION:\n\n"
+            "REGISTRATION:\n"
             + "\n".join(registration_lines)
         )
 
     if location:
         parts.append(
-            "LOCATION:\n\n"
+            "LOCATION:\n"
             + location
         )
 
     if related_links:
         parts.append(
-            "RELATED LINKS / CONTACT:\n\n"
+            "RELATED LINKS / CONTACT:\n"
             + "\n".join(related_links)
         )
 
-    # Three line breaks give Apple Calendar an extra blank line
-    # between each major section.
+    # Keep a generous visual gap between major sections,
+    # while keeping each heading close to its own contents.
     return "\n\n\n".join(parts)
 
 
