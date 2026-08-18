@@ -17,7 +17,7 @@ TZ = ZoneInfo("America/Los_Angeles")
 
 SESSION = requests.Session()
 SESSION.headers.update({
-    "User-Agent": "SVSC-Personal-Calendar/3.0 (+GitHub Actions; personal calendar subscription)"
+    "User-Agent": "SVSC-Personal-Calendar/3.1 (+GitHub Actions; personal calendar subscription)"
 })
 
 EVENT_ID_RE = re.compile(r"/event-(\d+)")
@@ -89,6 +89,7 @@ def value_after_label(lines, label):
     for i, line in enumerate(lines):
         if line.strip().lower() == label.lower() and i + 1 < len(lines):
             return lines[i + 1]
+
     return None
 
 
@@ -96,8 +97,12 @@ def find_location(lines):
     candidate = value_after_label(lines, "Location")
 
     if candidate and candidate not in {
-        "Log in", "Back", "When", "Registration",
-        "Spaces left", "Registered"
+        "Log in",
+        "Back",
+        "When",
+        "Registration",
+        "Spaces left",
+        "Registered",
     }:
         return candidate
 
@@ -110,6 +115,7 @@ def trim_footer(lines):
     for line in lines:
         if any(line.startswith(prefix) for prefix in FOOTER_PREFIXES):
             break
+
         output.append(line)
 
     return output
@@ -138,18 +144,23 @@ def extract_registration(lines):
             break
 
         if lower.startswith("registration is "):
-            # Keep the registration status, then stop before the narrative.
             result.append(line)
             break
 
         if line.startswith("PO Box ") or line.startswith("Powered by Wild Apricot"):
             break
 
-        if line not in {"Back", "When", "Location", "Spaces left", "Registered"}:
+        if line not in {
+            "Back",
+            "When",
+            "Location",
+            "Spaces left",
+            "Registered",
+        }:
             result.append(line)
 
-    # Avoid repeated neighboring lines.
     deduped = []
+
     for item in result:
         if not deduped or deduped[-1] != item:
             deduped.append(item)
@@ -173,21 +184,19 @@ def find_description_start(lines):
 
     metadata_end = -1
 
-    # Location / availability / registration metadata.
     for label in ("Location", "Spaces left", "Registered"):
         for i, line in enumerate(lines):
             if line.lower() == label.lower() and i + 1 < len(lines):
                 metadata_end = max(metadata_end, i + 1)
 
-    # For recurring events, skip the session list.
     for i, line in enumerate(lines):
         if SESSION_RE.search(line):
             metadata_end = max(metadata_end, i)
 
-    # For one-time events, skip date/time metadata.
     for i, line in enumerate(lines):
         if DATE_RE.fullmatch(line):
             metadata_end = max(metadata_end, i)
+
         if TIME_RANGE_RE.fullmatch(line):
             metadata_end = max(metadata_end, i)
 
@@ -198,7 +207,6 @@ def extract_description(lines):
     start = find_description_start(lines)
     body = trim_footer(lines[start:])
 
-    # Remove obvious UI/navigation remnants that are not part of the event.
     skip_exact = {
         "Back",
         "Log in",
@@ -207,15 +215,18 @@ def extract_description(lines):
     }
 
     cleaned = []
+
     for line in body:
         if line in skip_exact:
             continue
+
         if line.startswith("#") and line[1:].rstrip(".").isdigit():
             continue
+
         cleaned.append(line)
 
-    # Preserve paragraphs reasonably well without creating giant blank gaps.
     deduped = []
+
     for line in cleaned:
         if not deduped or deduped[-1] != line:
             deduped.append(line)
@@ -226,13 +237,17 @@ def extract_description(lines):
 def extract_related_links(soup, event_url):
     """
     Include useful public links from the event body such as PDFs and email
-    addresses. The event URL itself is already stored separately.
+    addresses. The main event URL itself is stored in the iCalendar URL field.
     """
     links = []
 
     for a in soup.find_all("a", href=True):
         href = a["href"].strip()
-        label = re.sub(r"\s+", " ", a.get_text(" ", strip=True)).strip()
+        label = re.sub(
+            r"\s+",
+            " ",
+            a.get_text(" ", strip=True)
+        ).strip()
 
         absolute = urljoin(event_url, href)
 
@@ -248,7 +263,11 @@ def extract_related_links(soup, event_url):
             absolute = href[7:]
             label = label or "Email"
 
-        entry = f"{label}: {absolute}" if label and label != absolute else absolute
+        entry = (
+            f"{label}: {absolute}"
+            if label and label != absolute
+            else absolute
+        )
 
         if entry not in links:
             links.append(entry)
@@ -256,36 +275,57 @@ def extract_related_links(soup, event_url):
     return links
 
 
-def build_notes(url, location, spaces_left, registered,
-                registration, description, related_links):
+def build_notes(
+    location,
+    spaces_left,
+    registered,
+    registration,
+    description,
+    related_links,
+):
     parts = []
 
     if description:
-        parts.append("EVENT DETAILS\n\n" + description)
+        parts.append(
+            "EVENT DETAILS\n\n"
+            + description
+        )
 
     registration_lines = []
 
     if spaces_left:
-        registration_lines.append(f"Spaces left: {spaces_left}")
+        registration_lines.append(
+            f"Spaces left: {spaces_left}"
+        )
 
     if registered:
-        registration_lines.append(f"Registered: {registered}")
+        registration_lines.append(
+            f"Registered: {registered}"
+        )
 
     if registration:
         if registration_lines:
             registration_lines.append("")
+
         registration_lines.extend(registration)
 
     if registration_lines:
-        parts.append("REGISTRATION\n\n" + "\n".join(registration_lines))
+        parts.append(
+            "REGISTRATION\n\n"
+            + "\n".join(registration_lines)
+        )
 
     if location:
-        parts.append("LOCATION\n\n" + location)
+        parts.append(
+            "LOCATION\n\n"
+            + location
+        )
 
     if related_links:
-        parts.append("RELATED LINKS / CONTACT\n\n" + "\n".join(related_links))
-
-    parts.append("SVSC EVENT PAGE\n\n" + url)
+        parts.append(
+            "RELATED LINKS / CONTACT\n\n"
+            + "\n".join(related_links)
+        )
 
     return "\n\n".join(parts)
 
@@ -294,6 +334,7 @@ def parse_event(event_id: str, url: str):
     soup = BeautifulSoup(fetch(url), "html.parser")
 
     h1 = soup.find("h1")
+
     title = (
         h1.get_text(" ", strip=True)
         if h1
@@ -311,7 +352,6 @@ def parse_event(event_id: str, url: str):
     related_links = extract_related_links(soup, url)
 
     notes = build_notes(
-        url=url,
         location=location,
         spaces_left=spaces_left,
         registered=registered,
@@ -320,7 +360,9 @@ def parse_event(event_id: str, url: str):
         related_links=related_links,
     )
 
-    session_matches = list(SESSION_RE.finditer(joined))
+    session_matches = list(
+        SESSION_RE.finditer(joined)
+    )
 
     if session_matches:
         occurrences = []
@@ -328,6 +370,7 @@ def parse_event(event_id: str, url: str):
 
         for index, match in enumerate(session_matches):
             date_text, start_text, end_text = match.groups()
+
             start, end = make_datetimes(
                 date_text,
                 start_text,
@@ -335,6 +378,7 @@ def parse_event(event_id: str, url: str):
             )
 
             key = (start, end)
+
             if key in seen:
                 continue
 
@@ -345,7 +389,8 @@ def parse_event(event_id: str, url: str):
                 if index == 0
                 else (
                     f"svsc-event-{event_id}-"
-                    f"{start:%Y%m%dT%H%M}@scottsvalleysportsmen.com"
+                    f"{start:%Y%m%dT%H%M}"
+                    f"@scottsvalleysportsmen.com"
                 )
             )
 
@@ -366,7 +411,9 @@ def parse_event(event_id: str, url: str):
     tm = TIME_RANGE_RE.search(joined)
 
     if not dm or not tm:
-        raise ValueError(f"Could not parse date/time for {url}")
+        raise ValueError(
+            f"Could not parse date/time for {url}"
+        )
 
     start, end = make_datetimes(
         dm.group(1),
@@ -387,6 +434,7 @@ def parse_event(event_id: str, url: str):
 
 def build_calendar(events):
     cal = Calendar()
+
     cal.add(
         "prodid",
         "-//Personal SVSC Calendar//scottsvalleysportsmen.com//EN"
@@ -395,20 +443,39 @@ def build_calendar(events):
     cal.add("calscale", "GREGORIAN")
     cal.add("method", "PUBLISH")
     cal.add("x-wr-calname", "SVSC Events")
-    cal.add("x-wr-timezone", "America/Los_Angeles")
+    cal.add(
+        "x-wr-timezone",
+        "America/Los_Angeles"
+    )
 
-    for item in sorted(events, key=lambda x: x["start"]):
+    for item in sorted(
+        events,
+        key=lambda x: x["start"]
+    ):
         ev = Event()
+
         ev.add("uid", item["uid"])
         ev.add("summary", item["title"])
         ev.add("dtstart", item["start"])
         ev.add("dtend", item["end"])
 
         if item["location"]:
-            ev.add("location", item["location"])
+            ev.add(
+                "location",
+                item["location"]
+            )
 
-        ev.add("url", item["url"])
-        ev.add("description", item["notes"])
+        # Keep the original SVSC event page in Apple's dedicated URL field.
+        ev.add(
+            "url",
+            item["url"]
+        )
+
+        if item["notes"]:
+            ev.add(
+                "description",
+                item["notes"]
+            )
 
         cal.add_component(ev)
 
@@ -416,49 +483,81 @@ def build_calendar(events):
 
 
 def main():
-    print(f"Fetching event list: {LIST_URL}")
-    links = event_links_from_list(fetch(LIST_URL))
-    print(f"Found {len(links)} event pages")
+    print(
+        f"Fetching event list: {LIST_URL}"
+    )
+
+    links = event_links_from_list(
+        fetch(LIST_URL)
+    )
+
+    print(
+        f"Found {len(links)} event pages"
+    )
 
     events = []
     failures = []
 
     for event_id, url in links:
         try:
-            occurrences = parse_event(event_id, url)
+            occurrences = parse_event(
+                event_id,
+                url
+            )
+
             events.extend(occurrences)
 
             if len(occurrences) > 1:
                 print(
-                    f"OK recurring ({len(occurrences)} sessions) "
+                    f"OK recurring "
+                    f"({len(occurrences)} sessions) "
                     f"{occurrences[0]['title']}"
                 )
+
             else:
                 ev = occurrences[0]
+
                 print(
-                    f"OK {ev['start']:%Y-%m-%d %H:%M}-"
-                    f"{ev['end']:%H:%M} {ev['title']}"
+                    f"OK "
+                    f"{ev['start']:%Y-%m-%d %H:%M}-"
+                    f"{ev['end']:%H:%M} "
+                    f"{ev['title']}"
                 )
 
         except Exception as exc:
-            failures.append((url, str(exc)))
-            print(f"WARN {url}: {exc}", file=sys.stderr)
+            failures.append(
+                (url, str(exc))
+            )
+
+            print(
+                f"WARN {url}: {exc}",
+                file=sys.stderr
+            )
 
     if not events:
         raise SystemExit(
-            "No events could be parsed; refusing to overwrite the calendar."
+            "No events could be parsed; "
+            "refusing to overwrite the calendar."
         )
 
-    OUT.parent.mkdir(parents=True, exist_ok=True)
-    OUT.write_bytes(build_calendar(events).to_ical())
+    OUT.parent.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+    OUT.write_bytes(
+        build_calendar(events).to_ical()
+    )
 
     print(
-        f"Wrote {OUT} with {len(events)} calendar occurrences"
+        f"Wrote {OUT} with "
+        f"{len(events)} calendar occurrences"
     )
 
     if failures:
         print(
-            f"{len(failures)} event page(s) could not be parsed.",
+            f"{len(failures)} event page(s) "
+            f"could not be parsed.",
             file=sys.stderr
         )
 
